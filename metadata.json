@@ -1,0 +1,6 @@
+{
+  "name": "PureStream — YouTube & YT Music Arkaplan Reklam Engelleyici",
+  "description": "YouTube ve YouTube Music için arkaplanda çalışan otomatik reklam atlayıcı, SponsorBlock entegrasyonlu kesintisiz medya oynatıcı ve tarayıcı eklentisi üreticisi.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
