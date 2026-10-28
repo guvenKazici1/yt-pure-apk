@@ -32,9 +32,10 @@ jobs:
             echo "Error: JAVA_HOME is not set." >&2
             exit 1
           fi
-          JAVA_VER_OUTPUT=$(java -version 2>&1 | head -n 1)
+          JAVA_FULL_OUTPUT="$(java -version 2>&1)"
+          JAVA_VER_OUTPUT="$(printf '%s\n' "${JAVA_FULL_OUTPUT}" | head -n 1)"
           echo "Detected Java version line: ${JAVA_VER_OUTPUT}"
-          JAVA_MAJOR=$(echo "${JAVA_VER_OUTPUT}" | sed -E 's/.*"([0-9]+)(\.[0-9]+)*".*/\1/')
+          JAVA_MAJOR="$(printf '%s\n' "${JAVA_VER_OUTPUT}" | sed -E 's/.*"([0-9]+)(\.[0-9]+)*.*".*/\1/')"
           if [ -z "${JAVA_MAJOR}" ] || ! [[ "${JAVA_MAJOR}" =~ ^[0-9]+$ ]]; then
             echo "Error: Unable to detect active Java major version." >&2
             exit 1
@@ -53,6 +54,12 @@ jobs:
       - name: Create temporary debug keystore
         run: |
           set -euo pipefail
+          SDK_DIR="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          if [ -d "${SDK_DIR}" ]; then
+            mkdir -p "${SDK_DIR}/licenses"
+            printf "\n24333f8a63b6825ea9c5514f83c2829b004d1fee\nd56f5187479451eabf01fb78af6dfcb131a6481e\n8933bad161af4178b1185d1a37fbf41ea5269c55\n" > "${SDK_DIR}/licenses/android-sdk-license"
+            printf "\n84831b9409646a918e30573bab4c9c91346d8abd\n" > "${SDK_DIR}/licenses/android-sdk-preview-license"
+          fi
           if [ ! -f "./debug.keystore" ]; then
             KEYTOOL_BIN="${JAVA_HOME}/bin/keytool"
             if [ ! -x "${KEYTOOL_BIN}" ]; then
