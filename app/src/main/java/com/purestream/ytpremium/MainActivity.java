@@ -1,290 +1,481 @@
 package com.purestream.ytpremium;
 
+import android.Manifest;
 import android.app.Activity;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
-import android.app.PictureInPictureParams;
-import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
-import android.content.IntentFilter;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
-import android.util.Rational;
+import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.View;
-import android.webkit.CookieManager;
-import android.webkit.WebChromeClient;
-import android.webkit.WebSettings;
-import android.webkit.WebView;
-import android.webkit.WebViewClient;
 import android.widget.Button;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
+import android.widget.Toast;
 
 public class MainActivity extends Activity {
 
-    private static final String CHANNEL_ID = "purestream_top_bar_channel";
-    private static final int NOTIFICATION_ID = 2001;
-    private static final String ACTION_TOGGLE_PLAY = "com.purestream.ytpremium.ACTION_TOGGLE_PLAY";
-    private static final String ACTION_NEXT_TRACK = "com.purestream.ytpremium.ACTION_NEXT_TRACK";
-    private static final String ACTION_CLOSE_X = "com.purestream.ytpremium.ACTION_CLOSE_X";
+    private static final String YT_PKG = "com.google.android.youtube";
+    private static final String YTM_PKG = "com.google.android.apps.youtube.music";
 
-    private BackgroundWebView webView;
-    private NotificationManager notificationManager;
-    private boolean closedByX = false;
-
-    public static class BackgroundWebView extends WebView {
-        public BackgroundWebView(Context context) {
-            super(context);
-        }
-
-        @Override
-        protected void onWindowVisibilityChanged(int visibility) {
-            super.onWindowVisibilityChanged(View.VISIBLE);
-        }
-    }
-
-    private final BroadcastReceiver topBarReceiver = new BroadcastReceiver() {
-        @Override
-        public void onReceive(Context context, Intent intent) {
-            if (intent == null || intent.getAction() == null || webView == null) return;
-            String action = intent.getAction();
-            if (ACTION_TOGGLE_PLAY.equals(action)) {
-                webView.evaluateJavascript(
-                    "(function(){var v=document.querySelector('video');if(v){if(v.paused)v.play();else v.pause();}})();",
-                    null
-                );
-            } else if (ACTION_NEXT_TRACK.equals(action)) {
-                webView.evaluateJavascript(
-                    "(function(){var n=document.querySelector('.ytp-next-button, .next-button');if(n)n.click();})();",
-                    null
-                );
-            } else if (ACTION_CLOSE_X.equals(action)) {
-                closedByX = true;
-                webView.evaluateJavascript(
-                    "(function(){var v=document.querySelector('video');if(v)v.pause();})();",
-                    null
-                );
-                if (notificationManager != null) {
-                    notificationManager.cancel(NOTIFICATION_ID);
-                }
-            }
-        }
-    };
+    private TextView statusAccessibilityBadge;
+    private TextView statusOverlayBadge;
+    private TextView statusNotificationBadge;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        buildControlCenterUi();
+        handleIncomingShareIntent(getIntent());
+    }
 
-        notificationManager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-        createTopNotificationChannel();
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleIncomingShareIntent(intent);
+    }
 
-        IntentFilter filter = new IntentFilter();
-        filter.addAction(ACTION_TOGGLE_PLAY);
-        filter.addAction(ACTION_NEXT_TRACK);
-        filter.addAction(ACTION_CLOSE_X);
-        if (Build.VERSION.SDK_INT >= 33) {
-            registerReceiver(topBarReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
-        } else {
-            registerReceiver(topBarReceiver, filter);
+    @Override
+    protected void onResume() {
+        super.onResume();
+        refreshPermissionBadges();
+    }
+
+    private void handleIncomingShareIntent(Intent intent) {
+        if (intent == null || intent.getAction() == null) return;
+        if (Intent.ACTION_SEND.equals(intent.getAction())) {
+            String sharedText = intent.getStringExtra(Intent.EXTRA_TEXT);
+            String sharedSubject = intent.getStringExtra(Intent.EXTRA_SUBJECT);
+            if (sharedText != null && !sharedText.trim().isEmpty()) {
+                launchMiniScreenTest(
+                    sharedSubject != null && !sharedSubject.isEmpty() ? sharedSubject : "YouTube Video · Küçük Ekran",
+                    sharedText.trim()
+                );
+                finish();
+            }
         }
+    }
+
+    private void buildControlCenterUi() {
+        float d = getResources().getDisplayMetrics().density;
+
+        ScrollView scrollView = new ScrollView(this);
+        scrollView.setBackgroundColor(Color.parseColor("#0B0F17"));
+        scrollView.setFillViewport(true);
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(Color.parseColor("#0B0F17"));
+        int pad = (int) (18 * d);
+        root.setPadding(pad, (int) (24 * d), pad, pad);
 
-        LinearLayout topBar = new LinearLayout(this);
-        topBar.setOrientation(LinearLayout.HORIZONTAL);
-        topBar.setBackgroundColor(Color.parseColor("#111827"));
-        topBar.setPadding(16, 14, 16, 14);
-        topBar.setGravity(Gravity.CENTER_VERTICAL);
+        // Header Banner
+        TextView badge = new TextView(this);
+        badge.setText("● PURESTREAM SİSTEM SERVİSİ · V5.0");
+        badge.setTextColor(Color.parseColor("#34D399"));
+        badge.setTextSize(11f);
+        badge.setTypeface(Typeface.DEFAULT_BOLD);
+        root.addView(badge);
 
-        Button btnYoutube = createStyledButton("YouTube", "#E11D48");
-        btnYoutube.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                closedByX = false;
-                webView.loadUrl("https://m.youtube.com");
-            }
-        });
+        TextView title = new TextView(this);
+        title.setText("Normal YouTube & YT Music Premium Asistanı");
+        title.setTextColor(Color.WHITE);
+        title.setTextSize(20f);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        title.setPadding(0, (int) (6 * d), 0, (int) (6 * d));
+        root.addView(title);
 
-        Button btnYtMusic = createStyledButton("YT Music", "#059669");
-        btnYtMusic.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                closedByX = false;
-                webView.loadUrl("https://music.youtube.com");
-            }
-        });
-
-        Button btnSkipService = createStyledButton("Üst Sekme & Skip", "#334155");
-        btnSkipService.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                try {
-                    startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
-                } catch (Exception ignored) {}
-            }
-        });
-
-        topBar.addView(btnYoutube);
-        topBar.addView(btnYtMusic);
-        topBar.addView(btnSkipService);
-
-        webView = new BackgroundWebView(this);
-        WebSettings s = webView.getSettings();
-        s.setJavaScriptEnabled(true);
-        s.setDomStorageEnabled(true);
-        s.setDatabaseEnabled(true);
-        s.setMediaPlaybackRequiresUserGesture(false);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
-            CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
-        }
-
-        webView.setWebChromeClient(new WebChromeClient());
-        webView.setWebViewClient(new WebViewClient() {
-            @Override
-            public void onPageFinished(WebView view, String url) {
-                super.onPageFinished(view, url);
-                injectYouTubePremiumEngine();
-            }
-        });
-
-        webView.loadUrl("https://m.youtube.com");
-
-        root.addView(topBar);
-        root.addView(
-            webView,
-            new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.MATCH_PARENT
-            )
+        TextView subtitle = new TextView(this);
+        subtitle.setText(
+            "YouTube bu uygulamanın içinde açılmaz. Aşağıdaki izinleri aktif ettikten sonra doğrudan telefonunuzdaki normal YouTube ve YT Music uygulamalarını açın:\n\n" +
+            "• Normal YouTube: Reklamları otomatik atlar, video oynarken uygulamayı arka plana aldığınızda ekranda Küçük Ekran (Mini-Screen) belirir (Durdur/Oynat ve ✕ Kapat tuşlu).\n" +
+            "• Normal YT Music: Telefonun üst bildirim sekmesinde çalan şarkıyı gösterir (⏮ Önceki, ⏯ Durdur/Oynat, ⏭ Sonraki ve ✕ Kapat tuşlu)."
         );
+        subtitle.setTextColor(Color.parseColor("#94A3B8"));
+        subtitle.setTextSize(12.5f);
+        subtitle.setLineSpacing(0f, 1.25f);
+        subtitle.setPadding(0, 0, 0, (int) (16 * d));
+        root.addView(subtitle);
 
-        setContentView(root);
+        // Quick Launch Row: Normal YouTube & Normal YT Music
+        LinearLayout launchRow = new LinearLayout(this);
+        launchRow.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams launchRowLp = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        launchRowLp.setMargins(0, 0, 0, (int) (16 * d));
+        launchRow.setLayoutParams(launchRowLp);
+
+        Button btnOpenNormalYoutube = createActionButton("▶ Normal YouTube'u Aç", "#E11D48", d);
+        LinearLayout.LayoutParams lpLeft = new LinearLayout.LayoutParams(0, (int) (46 * d), 1f);
+        lpLeft.setMargins(0, 0, (int) (6 * d), 0);
+        btnOpenNormalYoutube.setLayoutParams(lpLeft);
+        btnOpenNormalYoutube.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                openExternalApp(YT_PKG, "https://m.youtube.com");
+            }
+        });
+
+        Button btnOpenNormalYtMusic = createActionButton("🎵 Normal YT Music'i Aç", "#059669", d);
+        LinearLayout.LayoutParams lpRight = new LinearLayout.LayoutParams(0, (int) (46 * d), 1f);
+        lpRight.setMargins((int) (6 * d), 0, 0, 0);
+        btnOpenNormalYtMusic.setLayoutParams(lpRight);
+        btnOpenNormalYtMusic.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                openExternalApp(YTM_PKG, "https://music.youtube.com");
+            }
+        });
+
+        launchRow.addView(btnOpenNormalYoutube);
+        launchRow.addView(btnOpenNormalYtMusic);
+        root.addView(launchRow);
+
+        // Step 1 Card: Accessibility Service (AdBlock + Background Detection)
+        statusAccessibilityBadge = new TextView(this);
+        root.addView(createPermissionCard(
+            "1. Reklam Engelleme & Arka Plan Algılama Servisi",
+            "Normal YouTube ve YT Music'te reklamları otomatik geçer, video oynarken arka plana aldığınızda Küçük Ekranı ve YT Music üst sekmesini otomatik tetikler.",
+            statusAccessibilityBadge,
+            "Erişilebilirlik Servisini Aç",
+            "#2563EB",
+            new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    try {
+                        startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+                    } catch (Exception ignored) {}
+                }
+            },
+            d
+        ));
+
+        // Step 2 Card: Overlay Permission (Küçük Ekran / Mini-Screen)
+        statusOverlayBadge = new TextView(this);
+        root.addView(createPermissionCard(
+            "2. YouTube Arka Plan Küçük Ekran (Overlay) İzni",
+            "Normal YouTube'da video oynarken uygulamayı arka plana aldığınızda ekranda durdurup oynatabileceğiniz ve kapatabileceğiniz Küçük Ekranın belirmesi için gereklidir.",
+            statusOverlayBadge,
+            "Küçük Ekran İznini Ver",
+            "#7C3AED",
+            new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    requestOverlayPermission();
+                }
+            },
+            d
+        ));
+
+        // Step 3 Card: Top Notification Permission (YT Music Üst Sekme Şarkı Kontrolü)
+        statusNotificationBadge = new TextView(this);
+        root.addView(createPermissionCard(
+            "3. YT Music Telefon Üst Sekme Bildirim İzni",
+            "YT Music'te çalan şarkıyı telefonun üst sekmesinde göstermek ve Önceki (⏮), Durdur/Oynat (⏯), Sonraki (⏭) şarkıya geçebilmek için gereklidir.",
+            statusNotificationBadge,
+            "Üst Sekme Bildirim İznini Ver",
+            "#0D9488",
+            new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    requestNotificationPermission();
+                }
+            },
+            d
+        ));
+
+        // Instant Feature Test Section
+        TextView testHeader = new TextView(this);
+        testHeader.setText("ÖZELLİKLERİ ŞİMDİ TEST ET");
+        testHeader.setTextColor(Color.parseColor("#94A3B8"));
+        testHeader.setTextSize(11f);
+        testHeader.setTypeface(Typeface.DEFAULT_BOLD);
+        testHeader.setPadding(0, (int) (8 * d), 0, (int) (8 * d));
+        root.addView(testHeader);
+
+        Button btnTestMiniScreen = createActionButton(
+            "🗔 YouTube Küçük Ekranı (Durdur/Oynat & Kapat) Şimdi Göster",
+            "#1E293B",
+            d
+        );
+        LinearLayout.LayoutParams testMiniLp = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            (int) (44 * d)
+        );
+        testMiniLp.setMargins(0, 0, 0, (int) (10 * d));
+        btnTestMiniScreen.setLayoutParams(testMiniLp);
+        btnTestMiniScreen.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                launchMiniScreenTest("YouTube Video · Arka Plan Küçük Ekran", "https://m.youtube.com");
+            }
+        });
+        root.addView(btnTestMiniScreen);
+
+        Button btnTestYtMusicTopBar = createActionButton(
+            "🔔 YT Music Üst Sekme (⏮ Önceki · ⏯ Durdur/Oynat · ⏭ Sonraki) Göster",
+            "#1E293B",
+            d
+        );
+        LinearLayout.LayoutParams testYtmLp = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            (int) (44 * d)
+        );
+        btnTestYtMusicTopBar.setLayoutParams(testYtmLp);
+        btnTestYtMusicTopBar.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                triggerYtMusicTopBarPreview();
+            }
+        });
+        root.addView(btnTestYtMusicTopBar);
+
+        scrollView.addView(root);
+        setContentView(scrollView);
     }
 
-    private Button createStyledButton(String label, String hexColor) {
+    private View createPermissionCard(
+        String titleText,
+        String descText,
+        TextView statusBadge,
+        String buttonText,
+        String btnColorHex,
+        View.OnClickListener onClick,
+        float d
+    ) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(Color.parseColor("#111827"));
+        bg.setCornerRadius(12 * d);
+        bg.setStroke((int) (1 * d), Color.parseColor("#1F2937"));
+        card.setBackground(bg);
+        int p = (int) (14 * d);
+        card.setPadding(p, p, p, p);
+
+        LinearLayout.LayoutParams cardLp = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        cardLp.setMargins(0, 0, 0, (int) (12 * d));
+        card.setLayoutParams(cardLp);
+
+        LinearLayout topRow = new LinearLayout(this);
+        topRow.setOrientation(LinearLayout.HORIZONTAL);
+        topRow.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView titleView = new TextView(this);
+        titleView.setText(titleText);
+        titleView.setTextColor(Color.WHITE);
+        titleView.setTextSize(13.5f);
+        titleView.setTypeface(Typeface.DEFAULT_BOLD);
+        LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        titleView.setLayoutParams(titleLp);
+
+        statusBadge.setTextSize(10.5f);
+        statusBadge.setTypeface(Typeface.DEFAULT_BOLD);
+        statusBadge.setPadding((int) (8 * d), (int) (3 * d), (int) (8 * d), (int) (3 * d));
+
+        topRow.addView(titleView);
+        topRow.addView(statusBadge);
+
+        TextView descView = new TextView(this);
+        descView.setText(descText);
+        descView.setTextColor(Color.parseColor("#94A3B8"));
+        descView.setTextSize(11.5f);
+        descView.setPadding(0, (int) (6 * d), 0, (int) (12 * d));
+
+        Button actionBtn = createActionButton(buttonText, btnColorHex, d);
+        actionBtn.setLayoutParams(new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            (int) (40 * d)
+        ));
+        actionBtn.setOnClickListener(onClick);
+
+        card.addView(topRow);
+        card.addView(descView);
+        card.addView(actionBtn);
+        return card;
+    }
+
+    private Button createActionButton(String label, String hexColor, float d) {
         Button b = new Button(this);
         b.setText(label);
         b.setTextColor(Color.WHITE);
-        b.setTextSize(11f);
-        b.setBackgroundColor(Color.parseColor(hexColor));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-            0,
-            LinearLayout.LayoutParams.WRAP_CONTENT,
-            1f
-        );
-        lp.setMargins(6, 0, 6, 0);
-        b.setLayoutParams(lp);
+        b.setTextSize(12f);
+        b.setAllCaps(false);
+        b.setTypeface(Typeface.DEFAULT_BOLD);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(Color.parseColor(hexColor));
+        bg.setCornerRadius(8 * d);
+        b.setBackground(bg);
         return b;
     }
 
-    private void injectYouTubePremiumEngine() {
-        String script =
-            "(function(){" +
-            "if(window.__pureStreamInjected)return;" +
-            "window.__pureStreamInjected=true;" +
-            "try{" +
-            "Object.defineProperty(document,'hidden',{get:function(){return false;},configurable:true});" +
-            "Object.defineProperty(document,'visibilityState',{get:function(){return 'visible';},configurable:true});" +
-            "document.addEventListener('visibilitychange',function(e){e.stopImmediatePropagation();},true);" +
-            "}catch(e){}" +
-            "setInterval(function(){" +
-            "var skipSelectors=['.ytp-ad-skip-button','.ytp-ad-skip-button-modern','.ytp-skip-ad-button','.ytp-ad-skip-button-slot button','ytmusic-player-bar .skip-button'];" +
-            "for(var i=0;i<skipSelectors.length;i++){" +
-            "var btns=document.querySelectorAll(skipSelectors[i]);" +
-            "for(var j=0;j<btns.length;j++){if(btns[j]&&typeof btns[j].click==='function')btns[j].click();}" +
-            "}" +
-            "var player=document.getElementById('movie_player');" +
-            "var v=document.querySelector('video');" +
-            "if(player&&player.classList&&player.classList.contains('ad-showing')&&v&&isFinite(v.duration)&&v.duration>0){" +
-            "v.muted=true;v.currentTime=v.duration;" +
-            "if(typeof player.skipAd==='function')player.skipAd();" +
-            "}" +
-            "var dialogBtn=document.querySelector('ytmusic-you-there-renderer button, yt-confirm-dialog-renderer #confirm-button button');" +
-            "if(dialogBtn)dialogBtn.click();" +
-            "},120);" +
-            "})();";
-        webView.evaluateJavascript(script, null);
+    private void refreshPermissionBadges() {
+        boolean accEnabled = isAccessibilityServiceEnabled();
+        styleStatusBadge(statusAccessibilityBadge, accEnabled ? "AKTİF ✓" : "KAPALI · AÇIN", accEnabled);
+
+        boolean overlayEnabled = Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this);
+        styleStatusBadge(statusOverlayBadge, overlayEnabled ? "AKTİF ✓" : "İZİN GEREKLİ", overlayEnabled);
+
+        boolean notifEnabled = isNotificationPermissionGranted();
+        styleStatusBadge(statusNotificationBadge, notifEnabled ? "AKTİF ✓" : "İZİN GEREKLİ", notifEnabled);
     }
 
-    private void showPhoneTopBarNotification() {
-        if (notificationManager == null || closedByX) return;
-        int flags = Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0;
+    private void styleStatusBadge(TextView badge, String text, boolean active) {
+        if (badge == null) return;
+        badge.setText(text);
+        badge.setTextColor(active ? Color.parseColor("#34D399") : Color.parseColor("#FBBF24"));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(Color.parseColor(active ? "#064E3B" : "#451A03"));
+        bg.setCornerRadius(12f);
+        badge.setBackground(bg);
+    }
 
-        PendingIntent playIntent = PendingIntent.getBroadcast(this, 10, new Intent(ACTION_TOGGLE_PLAY), flags);
-        PendingIntent nextIntent = PendingIntent.getBroadcast(this, 11, new Intent(ACTION_NEXT_TRACK), flags);
-        PendingIntent closeXIntent = PendingIntent.getBroadcast(this, 12, new Intent(ACTION_CLOSE_X), flags);
-        PendingIntent openAppIntent = PendingIntent.getActivity(this, 13, new Intent(this, MainActivity.class), flags);
+    private boolean isAccessibilityServiceEnabled() {
+        if (PureStreamAccessibilityService.isRunning()) return true;
+        try {
+            String enabledServices = Settings.Secure.getString(
+                getContentResolver(),
+                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+            );
+            if (!TextUtils.isEmpty(enabledServices)) {
+                return enabledServices.contains(getPackageName());
+            }
+        } catch (Exception ignored) {}
+        return false;
+    }
+
+    private boolean isNotificationPermissionGranted() {
+        if (Build.VERSION.SDK_INT >= 33) {
+            return checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED;
+        }
+        return true;
+    }
+
+    private void requestOverlayPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+            try {
+                Intent intent = new Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:" + getPackageName())
+                );
+                startActivity(intent);
+            } catch (Exception ignored) {}
+        } else {
+            Toast.makeText(this, "Küçük Ekran (Overlay) izni zaten aktif!", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= 33) {
+            if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[] { Manifest.permission.POST_NOTIFICATIONS }, 501);
+                return;
+            }
+        }
+        triggerYtMusicTopBarPreview();
+        Toast.makeText(this, "YT Music Üst Sekme bildirimi aktif!", Toast.LENGTH_SHORT).show();
+    }
+
+    private void launchMiniScreenTest(String videoTitle, String videoUrl) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+            Toast.makeText(this, "Önce 2. adımdaki Küçük Ekran (Overlay) iznini verin.", Toast.LENGTH_LONG).show();
+            requestOverlayPermission();
+            return;
+        }
+        try {
+            Intent serviceIntent = new Intent(this, FloatingMiniPlayerService.class);
+            serviceIntent.setAction(FloatingMiniPlayerService.ACTION_SHOW_MINI_SCREEN);
+            serviceIntent.putExtra(FloatingMiniPlayerService.EXTRA_VIDEO_TITLE, videoTitle);
+            serviceIntent.putExtra(FloatingMiniPlayerService.EXTRA_VIDEO_URL, videoUrl);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(serviceIntent);
+            } else {
+                startService(serviceIntent);
+            }
+            Toast.makeText(this, "Küçük Ekran açıldı! Sürükleyebilir, durdurup oynatabilir veya ✕ ile kapatabilirsiniz.", Toast.LENGTH_SHORT).show();
+        } catch (Exception ignored) {}
+    }
+
+    private void triggerYtMusicTopBarPreview() {
+        Intent testBroadcast = new Intent(PureStreamAccessibilityService.ACTION_TEST_YTM_NOTIFICATION);
+        testBroadcast.setPackage(getPackageName());
+        testBroadcast.putExtra("song_title", "Blinding Lights");
+        testBroadcast.putExtra("artist_name", "The Weeknd · YT Music");
+        sendBroadcast(testBroadcast);
+
+        // Also post directly in case Accessibility Service isn't enabled yet so user can test immediately
+        NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        if (nm == null) return;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel ch = new NotificationChannel(
+                PureStreamAccessibilityService.YTM_CHANNEL_ID,
+                "YT Music Telefon Üst Sekme Şarkı Kontrolü",
+                NotificationManager.IMPORTANCE_LOW
+            );
+            nm.createNotificationChannel(ch);
+        }
+
+        int flags = Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0;
+        PendingIntent prevPending = PendingIntent.getBroadcast(this, 101, new Intent(PureStreamAccessibilityService.ACTION_YTM_PREV), flags);
+        PendingIntent playPausePending = PendingIntent.getBroadcast(this, 102, new Intent(PureStreamAccessibilityService.ACTION_YTM_PLAY_PAUSE), flags);
+        PendingIntent nextPending = PendingIntent.getBroadcast(this, 103, new Intent(PureStreamAccessibilityService.ACTION_YTM_NEXT), flags);
+        PendingIntent closePending = PendingIntent.getBroadcast(this, 104, new Intent(PureStreamAccessibilityService.ACTION_YTM_CLOSE_X), flags);
 
         Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
-            ? new Notification.Builder(this, CHANNEL_ID)
+            ? new Notification.Builder(this, PureStreamAccessibilityService.YTM_CHANNEL_ID)
             : new Notification.Builder(this);
 
         builder.setSmallIcon(android.R.drawable.ic_media_play)
-            .setContentTitle("PureStream · Telefon Üst Sekmesinde Çalıyor")
-            .setContentText("Arkaplan Modu Aktif · Kapatmak için ✕ Kapat tuşuna dokunun")
-            .setContentIntent(openAppIntent)
+            .setContentTitle("🎵 YT Music · Çalan Şarkı")
+            .setContentText("Telefon Üst Sekmesi · Önceki / Durdur-Oynat / Sonraki")
+            .setSubText("YT Music Üst Sekme")
             .setOngoing(true)
-            .addAction(android.R.drawable.ic_media_pause, "Duraklat/Çal", playIntent)
-            .addAction(android.R.drawable.ic_media_next, "Sonraki", nextIntent)
-            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "✕ Kapat", closeXIntent);
+            .setVisibility(Notification.VISIBILITY_PUBLIC)
+            .addAction(android.R.drawable.ic_media_previous, "⏮ Önceki", prevPending)
+            .addAction(android.R.drawable.ic_media_pause, "⏸ Durdur", playPausePending)
+            .addAction(android.R.drawable.ic_media_next, "⏭ Sonraki", nextPending)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "✕ Kapat", closePending);
 
-        notificationManager.notify(NOTIFICATION_ID, builder.build());
-    }
-
-    private void createTopNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && notificationManager != null) {
-            NotificationChannel channel = new NotificationChannel(
-                CHANNEL_ID,
-                "PureStream Telefon Üst Bildirim Sekmesi",
-                NotificationManager.IMPORTANCE_LOW
-            );
-            notificationManager.createNotificationChannel(channel);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            Notification.MediaStyle style = new Notification.MediaStyle();
+            style.setShowActionsInCompactView(0, 1, 2);
+            builder.setStyle(style);
         }
+
+        nm.notify(PureStreamAccessibilityService.YTM_NOTIFICATION_ID, builder.build());
     }
 
-    @Override
-    protected void onUserLeaveHint() {
-        super.onUserLeaveHint();
-        if (!closedByX) {
-            showPhoneTopBarNotification();
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                try {
-                    PictureInPictureParams params = new PictureInPictureParams.Builder()
-                        .setAspectRatio(new Rational(16, 9))
-                        .build();
-                    enterPictureInPictureMode(params);
-                } catch (Exception ignored) {}
-            }
-        }
-    }
-
-    @Override
-    protected void onPause() {
-        super.onPause();
-        if (!closedByX) {
-            showPhoneTopBarNotification();
-            if (webView != null) {
-                webView.evaluateJavascript(
-                    "(function(){var v=document.querySelector('video');if(v&&v.paused)v.play();})();",
-                    null
-                );
-            }
-        }
-    }
-
-    @Override
-    protected void onDestroy() {
+    private void openExternalApp(String packageName, String fallbackWebUrl) {
         try {
-            unregisterReceiver(topBarReceiver);
+            Intent launchIntent = getPackageManager().getLaunchIntentForPackage(packageName);
+            if (launchIntent != null) {
+                launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(launchIntent);
+                return;
+            }
         } catch (Exception ignored) {}
-        super.onDestroy();
+
+        try {
+            Intent fallbackIntent = new Intent(Intent.ACTION_VIEW, Uri.parse(fallbackWebUrl));
+            fallbackIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(fallbackIntent);
+        } catch (Exception ignored) {}
     }
 }

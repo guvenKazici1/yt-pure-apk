@@ -6,6 +6,7 @@ import {
   Check,
   Play,
   Pause,
+  SkipBack,
   SkipForward,
   ShieldCheck,
   MousePointerClick,
@@ -14,14 +15,13 @@ import {
   Music,
   Tv,
   X,
-  EyeOff,
-  Eye,
-  BellRing,
+  PictureInPicture2,
+  Maximize2,
+  ExternalLink,
 } from 'lucide-react';
 import { MediaTrack } from '../types';
 import { CURATED_TRACKS, formatTime } from '../utils/sponsorBlock';
 import { backgroundEngine } from '../utils/backgroundKeepAlive';
-import { usePWAInstall } from '../hooks/usePWAInstall';
 import { ApkDownloadModal } from './ApkDownloadModal';
 import {
   AndroidServiceConfig,
@@ -30,9 +30,7 @@ import {
   generateAccessibilityConfigXml,
   generateAndroidAccessibilityServiceKt,
   generateAndroidManifestXml,
-  generateMacroDroidJson,
   generateMainActivityKt,
-  getSignedApkBlobUrl,
 } from '../utils/androidAppGenerator';
 
 interface AndroidAppViewProps {
@@ -62,21 +60,23 @@ export const AndroidAppView: React.FC<AndroidAppViewProps> = ({
     autoMuteAdStream: true,
     ytMusicContinueConfirm: true,
     foregroundKeepAliveNotification: true,
-    scanIntervalMs: 100,
+    scanIntervalMs: 80,
   });
 
-  const [androidServiceEnabled, setAndroidServiceEnabled] = useState<boolean>(true);
-  const [activeAndroidApp, setActiveAndroidApp] = useState<'youtube' | 'ytmusic'>('ytmusic');
+  const [androidServiceEnabled] = useState<boolean>(true);
+  const [activeAndroidApp, setActiveAndroidApp] = useState<'youtube' | 'ytmusic'>('youtube');
   const [adState, setAdState] = useState<'none' | 'skip_stuck' | 'skipped'>('none');
-  const [skippedTotalAndroid, setSkippedTotalAndroid] = useState<number>(12);
+  const [skippedTotalAndroid, setSkippedTotalAndroid] = useState<number>(18);
 
-  // Controls whether YouTube/YT Music screen is open on the phone or minimized into the PHONE'S TOP NOTIFICATION SHADE
-  const [phoneAppInBackground, setPhoneAppInBackground] = useState<boolean>(false);
-  // Controls whether the Phone's Top Notification Bar was dismissed with 'X'
-  const [phoneTopBarClosedByX, setPhoneTopBarClosedByX] = useState<boolean>(false);
+  // Normal YouTube: When put in background while video is playing, Floating Mini-Screen ("Küçük Ekran") appears!
+  const [ytInBackgroundMiniScreen, setYtInBackgroundMiniScreen] = useState<boolean>(true);
+  const [ytMiniScreenClosedByX, setYtMiniScreenClosedByX] = useState<boolean>(false);
+
+  // Normal YT Music: Top Notification Bar ("Telefon Üst Sekmesi") with Song Title + Prev / Play-Pause / Next
+  const [ytmTopBarClosedByX, setYtmTopBarClosedByX] = useState<boolean>(false);
 
   const [lastAndroidLog, setLastAndroidLog] = useState<string>(
-    'YouTube / YT Music arkaplana alındığında Telefonun Üst Bildirim Sekmesi otomatik devreye girer'
+    'Normal YouTube & YT Music uygulamaları için Sistem Servisi: Reklam engelleme + Arka planda Küçük Ekran + YT Music Üst Sekme'
   );
 
   const [activeCodeFile, setActiveCodeFile] = useState<
@@ -84,7 +84,6 @@ export const AndroidAppView: React.FC<AndroidAppViewProps> = ({
   >('PureStreamAccessibilityService.kt');
   const [copied, setCopied] = useState(false);
 
-  // Auto-click stuck Skip button when simulated ad appears on the Android screen
   useEffect(() => {
     if (!androidServiceEnabled || adState !== 'skip_stuck') return;
 
@@ -92,48 +91,58 @@ export const AndroidAppView: React.FC<AndroidAppViewProps> = ({
       setAdState('skipped');
       setSkippedTotalAndroid((c) => c + 1);
       setLastAndroidLog(
-        `[${new Date().toTimeString().split(' ')[0]}] Otomatik Skip: "Atla" tuşuna ${config.scanIntervalMs}ms içinde basıldı, kesintisiz çalıyor`
+        `[${new Date().toTimeString().split(' ')[0]}] Normal ${
+          activeAndroidApp === 'youtube' ? 'YouTube' : 'YT Music'
+        } Reklamı Engellendi: "Atla" tuşuna ${config.scanIntervalMs}ms içinde otomatik basıldı`
       );
-    }, 750);
+    }, 650);
 
     return () => clearTimeout(timer);
-  }, [androidServiceEnabled, adState, config.scanIntervalMs]);
+  }, [androidServiceEnabled, adState, config.scanIntervalMs, activeAndroidApp]);
 
-  const handleTriggerStuckSkipAd = (targetApp: 'youtube' | 'ytmusic') => {
-    setPhoneAppInBackground(false);
-    setPhoneTopBarClosedByX(false);
-    setActiveAndroidApp(targetApp);
-    setAdState('skip_stuck');
+  const handlePrevTrack = () => {
+    setYtmTopBarClosedByX(false);
+    const idx = CURATED_TRACKS.findIndex((t) => t.id === activeTrack.id);
+    const prevIdx = idx <= 0 ? CURATED_TRACKS.length - 1 : idx - 1;
+    const prev = CURATED_TRACKS[prevIdx];
+    onSelectTrack(prev);
+    setLastAndroidLog(`⏮ YT Music Üst Sekme: Önceki şarkıya geçildi -> "${prev.title}"`);
   };
 
-  // Put YouTube / YT Music into the phone background -> Screen closes, Phone's Top Notification Bar activates automatically!
-  const handlePutAppInPhoneBackground = async () => {
-    setPhoneAppInBackground(true);
-    setPhoneTopBarClosedByX(false);
+  const handleNextTrackWithLog = () => {
+    setYtmTopBarClosedByX(false);
+    onNextTrack();
+    setLastAndroidLog('⏭ YT Music Üst Sekme: Sonraki şarkıya geçildi');
+  };
+
+  const handleSendNormalYoutubeToBackground = async () => {
+    setActiveAndroidApp('youtube');
+    setYtInBackgroundMiniScreen(true);
+    setYtMiniScreenClosedByX(false);
     if (!backgroundGuardActive) {
       onToggleBackgroundGuard();
     }
     if (!isPlaying) {
       onTogglePlay();
     }
-    const granted = await backgroundEngine.requestPhoneTopNotificationPermission();
-    if (granted) {
-      backgroundEngine.sendPhoneTopNotification(activeTrack.title, activeTrack.channel, activeTrack.videoId);
-    }
     setLastAndroidLog(
-      'Ekran kapatıldı -> Telefonun Üst Bildirim Sekmesinde (Android Bildirim Çubuğu) kesintisiz çalıyor'
+      'Normal YouTube arka plana alındı -> Ekranda Küçük Ekran (Mini-Screen) belirdi! Durdurup oynatabilir veya ✕ ile kapatabilirsiniz.'
     );
   };
 
-  // Close the Phone's Top Notification Bar with 'X' (Çarpı)
-  const handleClosePhoneTopBarWithX = () => {
-    setPhoneTopBarClosedByX(true);
-    setPhoneAppInBackground(false);
+  const handleCloseMiniScreenVideoWithX = () => {
+    setYtMiniScreenClosedByX(true);
+    setYtInBackgroundMiniScreen(false);
     onStopAllAndClose();
-    setLastAndroidLog('Telefonun Üst Bildirim Sekmesindeki oynatıcı "X" (Çarpı) ile tamamen kapatıldı');
+    setLastAndroidLog('Küçük Ekrandaki (Mini-Screen) video "✕ Kapat" tuşuyla durduruldu ve kapatıldı.');
   };
 
-  const { isInstallable, isInstalled, install } = usePWAInstall();
+  const handleCloseYtmTopBarWithX = () => {
+    setYtmTopBarClosedByX(true);
+    onStopAllAndClose();
+    setLastAndroidLog('YT Music Telefon Üst Sekmesi "✕" ile kapatıldı.');
+  };
+
   const [apkModalOpen, setApkModalOpen] = useState<boolean>(false);
   const [apkClicked, setApkClicked] = useState<boolean>(false);
 
@@ -141,7 +150,7 @@ export const AndroidAppView: React.FC<AndroidAppViewProps> = ({
     setApkClicked(true);
     setApkModalOpen(true);
     downloadDirectApkFile(config);
-    setLastAndroidLog('✓ Gerçek V1+V2+V3 imzalı PureStream-YouTube-Premium.apk (21 KB) indiriliyor...');
+    setLastAndroidLog('✓ GitHub Actions / Release üzerinden güncel app-debug.apk indiriliyor...');
   };
 
   const handleDownloadAndroidZip = () => {
@@ -149,20 +158,7 @@ export const AndroidAppView: React.FC<AndroidAppViewProps> = ({
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'purestream-android-telefon-ust-sekme-app.zip';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-
-  const handleDownloadMacroDroid = () => {
-    const json = generateMacroDroidJson(config);
-    const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'PureStream_Telefon_Ust_Sekme_ve_Skip.macro';
+    a.download = 'purestream-normal-youtube-ytmusic-companion.zip';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -186,268 +182,364 @@ export const AndroidAppView: React.FC<AndroidAppViewProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* Top Action Banner: Real Phone Top Notification Shade Control */}
-      <div className="bg-[#111827] border border-slate-700 rounded-lg p-5 flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
-        <div className="space-y-1">
-          <div className="flex items-center gap-2 text-xs font-semibold text-emerald-400">
+      {/* Architecture Banner explaining "Not inside an app — works directly on normal YouTube & YT Music" */}
+      <div className="bg-gradient-to-r from-[#111827] via-slate-900 to-rose-950/40 border border-rose-500/40 rounded-xl p-5 flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4">
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-2 text-xs font-bold text-emerald-400 uppercase tracking-wide">
             <Smartphone className="w-4 h-4 shrink-0" />
             <span>
-              Telefonun Üst Bildirim Sekmesinde Çalma (YT Music Tarzı · Çarpı &ldquo;X&rdquo; İle Kapatılabilir)
+              Uygulama İçi Tarayıcı Değil · Doğrudan Normal YouTube &amp; Normal YT Music Üzerinde Çalışır (v5.0)
             </span>
           </div>
-          <p className="text-xs text-slate-300 leading-relaxed">
-            YouTube veya YT Music&apos;i arkaplana aldığınızda veya ekranı kapattığınızda, uygulamanın içinde değil{' '}
-            <strong>doğrudan telefonunuzun üst bildirim sekmesinde (Android Bildirim Çubuğu)</strong> çalmaya devam
-            eder. İstediğiniz zaman telefonun üst bildirimindeki <strong>&ldquo;X&rdquo; (Çarpı)</strong> tuşuyla
-            tamamen kapatabilirsiniz.
+          <p className="text-xs text-slate-200 leading-relaxed">
+            YouTube bu uygulamanın içinde açılmaz! Telefonunuzdaki <strong>normal YouTube</strong> uygulamasını
+            açtığınızda <strong>reklamları otomatik engeller</strong> ve video oynarken uygulamayı arka plana
+            aldığınızda ekranda <strong>Küçük Ekran (Mini-Screen)</strong> belirir (durdurup oynatabilir ve{' '}
+            <strong>✕</strong> ile videoyu kapatabilirsiniz). <strong>Normal YT Music</strong> için ise telefonun{' '}
+            <strong>üst bildirim sekmesinde çalan şarkıyı gösterir</strong>; <strong>⏮ Önceki</strong>,{' '}
+            <strong>⏯ Durdur/Oynat</strong> ve <strong>⏭ Sonraki</strong> tuşlarıyla şarkı değiştirebilirsiniz.
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2 shrink-0">
           <a
-            href="/api/purestream-youtube-premium.apk"
-            download="PureStream-YouTube-Premium.apk"
-            onClick={handleDownloadDirectApk}
-            className={`px-4 py-2.5 text-white text-xs font-semibold rounded-lg flex items-center gap-2 transition-all active:scale-95 cursor-pointer whitespace-nowrap shrink-0 shadow-md ${
-              apkClicked ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-rose-600 hover:bg-rose-500'
-            }`}
+            href="https://github.com/guvenKazici1/yt-pure-apk/releases/latest/download/app-debug.apk"
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={() => setApkClicked(true)}
+            className="px-4 py-2.5 bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold rounded-lg flex items-center gap-2 transition-all active:scale-95 cursor-pointer whitespace-nowrap shadow-md"
           >
             <Download className="w-4 h-4" />
-            {apkClicked ? '✓ APK İndiriliyor (PureStream.apk)' : 'Direkt İndir: PureStream-YouTube-Premium.apk'}
+            <span>GitHub Latest APK İndir (app-debug.apk)</span>
+            <ExternalLink className="w-3.5 h-3.5 opacity-80" />
           </a>
 
           <button
             type="button"
-            onClick={handlePutAppInPhoneBackground}
-            className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-lg flex items-center gap-2 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+            onClick={handleSendNormalYoutubeToBackground}
+            className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-lg flex items-center gap-2 transition-colors cursor-pointer whitespace-nowrap"
           >
-            <BellRing className="w-4 h-4" />
-            Ekranı Kapat & Telefon Üst Sekmesinde Çal
+            <PictureInPicture2 className="w-4 h-4" />
+            <span>Küçük Ekranı Test Et</span>
           </button>
         </div>
       </div>
 
       <ApkDownloadModal isOpen={apkModalOpen} onClose={() => setApkModalOpen(false)} config={config} />
 
-      {/* Main Grid: Interactive Android Phone Screen (Left) + Service Controls & APK Download (Right) */}
+      {/* Main Grid: Interactive Phone Simulation (Left 6 Cols) + Feature & GitHub Instructions (Right 6 Cols) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        {/* Left 5 Cols: Interactive Android Phone with Top Notification Shade (Telefonun Üst Sekmesi) */}
-        <div className="lg:col-span-5 bg-[#111827] border border-slate-700 rounded-lg p-5 space-y-4">
-          <div className="flex items-center justify-between">
+        {/* Left 6 Cols: Interactive Phone Demonstrating YT Music Top Bar & Normal YouTube Floating Mini-Screen */}
+        <div className="lg:col-span-6 bg-[#111827] border border-slate-700 rounded-xl p-5 space-y-4">
+          <div className="flex items-center justify-between gap-2">
             <div>
-              <h2 className="text-base font-semibold text-white">Telefonun Üst Bildirim Sekmesi & Ekranı</h2>
+              <h2 className="text-base font-semibold text-white">
+                Canlı Telefon Simülasyonu: Küçük Ekran &amp; YT Music Üst Sekme
+              </h2>
               <p className="text-xs text-slate-300 mt-0.5">
-                Ekranı kapattığınızda telefonun en üstündeki bildirim çekmecesinde çalmaya devam eder.
+                Normal YouTube arka plana alındığında çıkan <strong>Küçük Ekranı</strong> ve{' '}
+                <strong>YT Music Üst Sekmesini</strong> aşağıdan test edin.
               </p>
             </div>
-            <span className="font-mono text-xs text-emerald-400">TELEFON EKRANI</span>
+            <span className="px-2.5 py-1 rounded bg-emerald-950 border border-emerald-600/60 font-mono text-[11px] text-emerald-300 shrink-0">
+              V5.0 AKTİF
+            </span>
           </div>
 
-          {/* Android Phone Frame */}
-          <div className="bg-slate-900 border-2 border-slate-700 rounded-2xl p-3.5 space-y-3.5 shadow-xl">
-            {/* 1. PHONE STATUS BAR (Saat + İkonlar) */}
-            <div className="flex items-center justify-between text-[11px] font-mono text-slate-300 px-1">
-              <span className="font-semibold">09:41 · Android</span>
-              <span className={androidServiceEnabled ? 'text-emerald-400 font-semibold' : 'text-rose-400'}>
-                {phoneAppInBackground ? '▲ ÜST BİLDİRİMDE ÇALIYOR' : '● KALKAN AKTİF'}
+          {/* Phone Frame */}
+          <div className="bg-slate-950 border-2 border-slate-700 rounded-2xl p-4 space-y-4 shadow-2xl relative overflow-hidden">
+            {/* 1. Phone Status Bar */}
+            <div className="flex items-center justify-between text-[11px] font-mono text-slate-300 px-1 border-b border-slate-800 pb-2">
+              <span className="font-semibold">09:41 · Android Sistem</span>
+              <span className="text-emerald-400 font-semibold">
+                ● REKLAM ENGELLEYİCİ &amp; ARKA PLAN AKTİF
               </span>
             </div>
 
-            {/* 2. PHONE'S TOP NOTIFICATION SHADE (TELEFONUN ÜST SEKMESİ — YT MUSIC GİBİ ÇALAN VE 'X' İLE KAPATILABİLEN KART) */}
-            {!phoneTopBarClosedByX ? (
-              <div className="bg-gradient-to-r from-slate-800 via-slate-800 to-emerald-950/90 border-2 border-emerald-500/60 rounded-xl p-3 shadow-lg space-y-2">
-                <div className="flex items-center justify-between gap-2 border-b border-slate-700/80 pb-1.5">
-                  <div className="flex items-center gap-1.5">
-                    <Headphones className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                    <span className="text-[10px] font-mono font-bold text-emerald-300 uppercase tracking-wide">
-                      TELEFON ÜST BİLDİRİM SEKMESİ · {activeAndroidApp === 'ytmusic' ? 'YT MUSIC' : 'YOUTUBE'}
-                    </span>
-                  </div>
-
-                  <div className="flex items-center gap-1">
-                    <button
-                      type="button"
-                      onClick={() => setPhoneAppInBackground((v) => !v)}
-                      title={phoneAppInBackground ? 'Video Ekranını Geri Aç' : 'Video Ekranını Kapat (Sadece Üst Sekmede Çalsın)'}
-                      className="px-2 py-0.5 bg-slate-700 hover:bg-slate-600 text-slate-100 text-[10px] font-medium rounded flex items-center gap-1 cursor-pointer"
-                    >
-                      {phoneAppInBackground ? (
-                        <>
-                          <Eye className="w-3 h-3 text-emerald-400" />
-                          <span>Ekranı Aç</span>
-                        </>
-                      ) : (
-                        <>
-                          <EyeOff className="w-3 h-3 text-emerald-400" />
-                          <span>Ekranı Kapat</span>
-                        </>
-                      )}
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={handleClosePhoneTopBarWithX}
-                      title="Telefonun Üst Bildiriminden Tamamen Kapat (X)"
-                      className="p-1 bg-rose-600/80 hover:bg-rose-500 text-white rounded transition-colors cursor-pointer"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between gap-2.5">
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <img
-                      src={`https://i.ytimg.com/vi/${activeTrack.videoId}/hqdefault.jpg`}
-                      alt={activeTrack.title}
-                      referrerPolicy="no-referrer"
-                      className="w-11 h-9 rounded object-cover border border-slate-600 shrink-0"
-                    />
-                    <div className="min-w-0">
-                      <p className="text-xs font-bold text-white truncate">{activeTrack.title}</p>
-                      <p className="text-[11px] text-slate-300 truncate">{activeTrack.channel}</p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    <button
-                      type="button"
-                      onClick={onTogglePlay}
-                      className="p-2 bg-rose-600 hover:bg-rose-500 text-white rounded-lg cursor-pointer"
-                      title={isPlaying ? 'Duraklat' : 'Oynat'}
-                    >
-                      {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={onNextTrack}
-                      className="p-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg cursor-pointer"
-                      title="Sonraki Şarkı"
-                    >
-                      <SkipForward className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="bg-slate-800/80 border border-slate-700 rounded-xl p-3 flex items-center justify-between gap-2">
-                <span className="text-xs text-slate-300">
-                  Telefon üst sekmesi <strong>X</strong> ile kapatıldı.
+            {/* 2. YT MUSIC PHONE TOP NOTIFICATION BAR (TELEFON ÜST SEKMESİNDE ÇALAN ŞARKI: ÖNCEKİ / PLAY-PAUSE / SONRAKİ) */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between text-[11px] text-slate-400 px-1">
+                <span className="font-semibold text-emerald-300 flex items-center gap-1.5">
+                  <Music className="w-3.5 h-3.5" />
+                  1. YT Music Telefon Üst Sekmesi (Çalan Şarkı &amp; Önceki/Sonraki)
                 </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPhoneTopBarClosedByX(false);
-                    onTogglePlay();
-                  }}
-                  className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded cursor-pointer shrink-0"
-                >
-                  Tekrar Başlat
-                </button>
-              </div>
-            )}
-
-            {/* 3. PHONE BODY: Either Closed Video Screen (Phone Home Screen while playing in Phone Top Bar) OR Open YouTube/YT Music Screen */}
-            {phoneAppInBackground ? (
-              <div className="bg-slate-800/60 border border-slate-700 rounded-xl p-5 text-center space-y-3">
-                <div className="w-10 h-10 rounded-full bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center mx-auto">
-                  <Smartphone className="w-5 h-5 text-emerald-400" />
-                </div>
-                <div className="space-y-1">
-                  <p className="text-xs font-bold text-white">
-                    YouTube / YT Music Ekranı Kapatıldı (Arkaplanda)
-                  </p>
-                  <p className="text-[11px] text-slate-300 leading-relaxed">
-                    Görüntü ekranı kapalı. Müzik şu anda yukarıdaki{' '}
-                    <strong>Telefonun Üst Bildirim Sekmesinde</strong> kesintisiz çalıyor. İsterseniz üstteki{' '}
-                    <strong>&ldquo;X&rdquo;</strong> ile tamamen kapatabilir veya ekranı geri açabilirsiniz.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setPhoneAppInBackground(false)}
-                  className="px-3.5 py-2 bg-slate-700 hover:bg-slate-600 text-white text-xs font-semibold rounded-lg inline-flex items-center gap-1.5 cursor-pointer"
-                >
-                  <Eye className="w-3.5 h-3.5 text-emerald-400" />
-                  Uygulama Ekranını Geri Aç
-                </button>
-              </div>
-            ) : (
-              <div className="bg-slate-800/90 border border-slate-700 rounded-xl p-3.5 space-y-3">
-                {/* App Switcher & Minimize to Phone Top Bar Button */}
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-1 bg-slate-900 p-1 rounded-lg">
-                    <button
-                      type="button"
-                      onClick={() => setActiveAndroidApp('ytmusic')}
-                      className={`py-1 px-2.5 rounded text-[11px] font-semibold flex items-center gap-1 cursor-pointer ${
-                        activeAndroidApp === 'ytmusic' ? 'bg-rose-600 text-white' : 'text-slate-300'
-                      }`}
-                    >
-                      <Music className="w-3 h-3" />
-                      YT Music
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setActiveAndroidApp('youtube')}
-                      className={`py-1 px-2.5 rounded text-[11px] font-semibold flex items-center gap-1 cursor-pointer ${
-                        activeAndroidApp === 'youtube' ? 'bg-rose-600 text-white' : 'text-slate-300'
-                      }`}
-                    >
-                      <Tv className="w-3 h-3" />
-                      YouTube
-                    </button>
-                  </div>
-
+                {ytmTopBarClosedByX && (
                   <button
                     type="button"
-                    onClick={handlePutAppInPhoneBackground}
-                    className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-semibold rounded-md flex items-center gap-1 cursor-pointer shrink-0"
+                    onClick={() => {
+                      setYtmTopBarClosedByX(false);
+                      if (!isPlaying) onTogglePlay();
+                    }}
+                    className="text-emerald-400 underline cursor-pointer"
                   >
-                    <EyeOff className="w-3 h-3" />
-                    Arkaplana Al (Üst Sekmede Çalsın)
+                    Üst Sekmeyi Geri Aç
                   </button>
-                </div>
+                )}
+              </div>
 
-                {/* Ad / Skip Button Interception Overlay Banner inside Android Screen */}
-                {adState === 'skip_stuck' ? (
-                  <div className="p-3 bg-amber-500/20 border border-amber-400/60 rounded-lg flex items-center justify-between gap-2">
-                    <div className="text-xs text-amber-100">
-                      <p className="font-semibold">Reklamda &ldquo;Atla&rdquo; Tuşu Algılandı!</p>
-                      <p className="text-[11px] text-amber-200">
-                        {androidServiceEnabled
-                          ? 'Otomatik tıklanıyor (100ms)...'
-                          : 'Otomatik tıklamak için sağdaki tuşa basın ->'}
-                      </p>
+              {!ytmTopBarClosedByX ? (
+                <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-emerald-950/90 border-2 border-emerald-500/70 rounded-xl p-3.5 shadow-lg space-y-2.5">
+                  <div className="flex items-center justify-between gap-2 border-b border-slate-700/80 pb-2">
+                    <div className="flex items-center gap-1.5">
+                      <Headphones className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                      <span className="text-[10px] font-mono font-bold text-emerald-300 uppercase tracking-wide">
+                        YT MUSIC · TELEFON ÜST BİLDİRİM SEKMESİ
+                      </span>
                     </div>
                     <button
                       type="button"
-                      onClick={() => {
-                        setAdState('skipped');
-                        setSkippedTotalAndroid((c) => c + 1);
-                      }}
-                      className="px-3 py-1.5 bg-white text-slate-950 font-bold text-xs rounded shadow flex items-center gap-1 shrink-0 cursor-pointer"
+                      onClick={handleCloseYtmTopBarWithX}
+                      title="Üst Sekmeyi Kapat (X)"
+                      className="px-2 py-0.5 bg-rose-600/80 hover:bg-rose-500 text-white text-[10px] font-bold rounded flex items-center gap-1 cursor-pointer"
                     >
-                      <span>Atla</span>
-                      <MousePointerClick className="w-3.5 h-3.5 text-rose-600" />
+                      <X className="w-3 h-3" />
+                      <span>Kapat</span>
                     </button>
                   </div>
-                ) : (
-                  <div className="px-3 py-2 bg-emerald-950/70 border border-emerald-700/60 rounded-lg flex items-center justify-between text-xs text-emerald-200">
-                    <span className="flex items-center gap-1.5 font-medium">
-                      <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
-                      Otomatik Skip: {skippedTotalAndroid}
-                    </span>
-                    <span className="font-mono text-[11px] text-emerald-400">REKLAMSIZ</span>
-                  </div>
-                )}
 
-                {/* Quick Track Switcher inside Android Phone */}
-                <div className="space-y-1">
-                  <p className="text-[11px] font-semibold text-slate-300">
-                    Telefonda Çalınacak İçeriği Seçin:
-                  </p>
-                  <div className="grid grid-cols-1 gap-1 max-h-[120px] overflow-y-auto pr-1">
+                  {/* Playing Song Info + Previous / Play-Pause / Next Controls */}
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <img
+                        src={`https://i.ytimg.com/vi/${activeTrack.videoId}/hqdefault.jpg`}
+                        alt={activeTrack.title}
+                        referrerPolicy="no-referrer"
+                        className="w-12 h-10 rounded-lg object-cover border border-slate-600 shrink-0"
+                      />
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold text-white truncate">🎵 {activeTrack.title}</p>
+                        <p className="text-[11px] text-emerald-300 truncate">
+                          {activeTrack.channel} · {isPlaying ? 'Çalıyor' : 'Duraklatıldı'}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* ⏮ Önceki | ⏯ Play/Pause | ⏭ Sonraki */}
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={handlePrevTrack}
+                        className="p-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg cursor-pointer transition-transform active:scale-95"
+                        title="Önceki Şarkı (⏮)"
+                      >
+                        <SkipBack className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={onTogglePlay}
+                        className="p-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg cursor-pointer transition-transform active:scale-95 shadow"
+                        title={isPlaying ? 'Durdur (⏸)' : 'Oynat (▶)'}
+                      >
+                        {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleNextTrackWithLog}
+                        className="p-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg cursor-pointer transition-transform active:scale-95"
+                        title="Sonraki Şarkı (⏭)"
+                      >
+                        <SkipForward className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 text-xs text-slate-400 flex items-center justify-between">
+                  <span>YT Music üst sekmesi kapatıldı.</span>
+                  <button
+                    type="button"
+                    onClick={() => setYtmTopBarClosedByX(false)}
+                    className="px-2.5 py-1 bg-emerald-600 text-white rounded text-xs font-semibold cursor-pointer"
+                  >
+                    Tekrar Göster
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* 3. NORMAL YOUTUBE APP & FLOATING MINI-SCREEN ("KÜÇÜK EKRAN") */}
+            <div className="space-y-2 pt-1">
+              <div className="flex items-center justify-between text-[11px] text-slate-400 px-1">
+                <span className="font-semibold text-rose-400 flex items-center gap-1.5">
+                  <Tv className="w-3.5 h-3.5" />
+                  2. Normal YouTube: Reklam Engelleme &amp; Arka Plan Küçük Ekran
+                </span>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setYtInBackgroundMiniScreen(false);
+                      setYtMiniScreenClosedByX(false);
+                    }}
+                    className={`px-2 py-0.5 rounded text-[10px] font-semibold cursor-pointer ${
+                      !ytInBackgroundMiniScreen ? 'bg-rose-600 text-white' : 'bg-slate-800 text-slate-300'
+                    }`}
+                  >
+                    Normal YouTube Açık
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSendNormalYoutubeToBackground}
+                    className={`px-2 py-0.5 rounded text-[10px] font-semibold cursor-pointer ${
+                      ytInBackgroundMiniScreen ? 'bg-rose-600 text-white' : 'bg-slate-800 text-slate-300'
+                    }`}
+                  >
+                    Arka Plana Al (Küçük Ekran)
+                  </button>
+                </div>
+              </div>
+
+              {ytInBackgroundMiniScreen ? (
+                /* Phone Home Screen with Floating Mini-Screen Overlay ("Küçük Ekran") */
+                <div className="bg-slate-900/90 border border-slate-800 rounded-xl p-4 min-h-[230px] flex flex-col justify-between relative">
+                  <div className="text-xs text-slate-400 space-y-1">
+                    <p className="font-semibold text-slate-200">
+                      📱 Telefon Ana Ekranı (Normal YouTube Arka Plana Alındı)
+                    </p>
+                    <p className="text-[11px] text-slate-400">
+                      Normal YouTube&apos;da video oynarken ana ekrana döndüğünüzde veya başka uygulamaya
+                      geçtiğinizde aşağıdaki <strong>Küçük Ekran (Mini-Screen)</strong> otomatik belirir:
+                    </p>
+                  </div>
+
+                  {!ytMiniScreenClosedByX ? (
+                    /* FLOATING MINI-SCREEN OVERLAY (KÜÇÜK EKRAN) */
+                    <div className="mt-3 ml-auto w-full sm:w-[310px] bg-[#0F172A] border-2 border-rose-500 rounded-xl p-2.5 shadow-2xl space-y-2">
+                      {/* Mini-Screen Header */}
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[10px] font-mono font-bold text-rose-400 flex items-center gap-1">
+                          <PictureInPicture2 className="w-3.5 h-3.5" />
+                          ● YOUTUBE KÜÇÜK EKRAN
+                        </span>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setYtInBackgroundMiniScreen(false)}
+                            className="px-2 py-0.5 bg-slate-700 hover:bg-slate-600 text-white text-[10px] font-semibold rounded flex items-center gap-1 cursor-pointer"
+                            title="Normal YouTube'a Geri Dön"
+                          >
+                            <Maximize2 className="w-2.5 h-2.5" />
+                            <span>Büyüt</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleCloseMiniScreenVideoWithX}
+                            className="px-2 py-0.5 bg-rose-600 hover:bg-rose-500 text-white text-[10px] font-bold rounded cursor-pointer"
+                            title="Videoyu ve Küçük Ekranı Kapat (✕)"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Mini-Screen 16:9 Video Preview */}
+                      <div className="relative rounded-lg overflow-hidden border border-slate-700 bg-black aspect-video max-h-[120px] w-full">
+                        <img
+                          src={`https://i.ytimg.com/vi/${activeTrack.videoId}/hqdefault.jpg`}
+                          alt={activeTrack.title}
+                          referrerPolicy="no-referrer"
+                          className={`w-full h-full object-cover ${isPlaying ? 'opacity-90' : 'opacity-50'}`}
+                        />
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/30 flex items-end p-2">
+                          <p className="text-[11px] font-semibold text-white truncate w-full">
+                            {activeTrack.title}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Mini-Screen Controls: Durdur/Oynat & Videoyu Kapat */}
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={onTogglePlay}
+                          className="py-1.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 cursor-pointer transition-transform active:scale-95"
+                        >
+                          {isPlaying ? (
+                            <>
+                              <Pause className="w-3.5 h-3.5" />
+                              <span>Durdur</span>
+                            </>
+                          ) : (
+                            <>
+                              <Play className="w-3.5 h-3.5" />
+                              <span>Oynat</span>
+                            </>
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleCloseMiniScreenVideoWithX}
+                          className="py-1.5 px-3 bg-rose-700 hover:bg-rose-600 text-white text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 cursor-pointer transition-transform active:scale-95"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                          <span>Videoyu Kapat</span>
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-4 bg-slate-950 border border-slate-800 rounded-xl p-3 flex items-center justify-between">
+                      <span className="text-xs text-slate-300">
+                        Küçük ekran videosu <strong>✕ Videoyu Kapat</strong> ile kapatıldı.
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleSendNormalYoutubeToBackground}
+                        className="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold rounded-lg cursor-pointer"
+                      >
+                        Küçük Ekranı Tekrar Aç
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                /* Normal Official YouTube App Foreground View with Auto Ad-Block */
+                <div className="bg-slate-900 border border-slate-700 rounded-xl p-3.5 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-white flex items-center gap-1.5">
+                      <Tv className="w-4 h-4 text-rose-500" />
+                      Normal YouTube Uygulaması (com.google.android.youtube)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleSendNormalYoutubeToBackground}
+                      className="px-2.5 py-1 bg-rose-600 hover:bg-rose-500 text-white text-[11px] font-semibold rounded-md flex items-center gap-1 cursor-pointer"
+                    >
+                      <PictureInPicture2 className="w-3.5 h-3.5" />
+                      <span>Arka Plana Al → Küçük Ekran Aç</span>
+                    </button>
+                  </div>
+
+                  {adState === 'skip_stuck' ? (
+                    <div className="p-3 bg-amber-500/20 border border-amber-400/60 rounded-lg flex items-center justify-between gap-2">
+                      <div className="text-xs text-amber-100">
+                        <p className="font-semibold">Normal YouTube&apos;da Reklam Algılandı!</p>
+                        <p className="text-[11px] text-amber-200">
+                          PureStream Erişilebilirlik Servisi &ldquo;Atla&rdquo; tuşuna otomatik basıyor...
+                        </p>
+                      </div>
+                      <span className="px-2.5 py-1 bg-white text-slate-950 font-bold text-xs rounded shadow flex items-center gap-1">
+                        <span>Atla</span>
+                        <MousePointerClick className="w-3.5 h-3.5 text-rose-600" />
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="px-3 py-2 bg-emerald-950/70 border border-emerald-700/60 rounded-lg flex items-center justify-between text-xs text-emerald-200">
+                      <span className="flex items-center gap-1.5 font-medium">
+                        <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+                        Normal YouTube Reklam Engelleyici Aktif (Engellenen: {skippedTotalAndroid})
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setAdState('skip_stuck')}
+                        className="text-[11px] underline text-emerald-300 cursor-pointer"
+                      >
+                        Reklam Test Et
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Select Song / Video */}
+                  <div className="grid grid-cols-2 gap-1.5">
                     {CURATED_TRACKS.slice(0, 4).map((t) => {
                       const selected = t.id === activeTrack.id;
                       return (
@@ -455,17 +547,18 @@ export const AndroidAppView: React.FC<AndroidAppViewProps> = ({
                           key={t.id}
                           type="button"
                           onClick={() => {
-                            setPhoneTopBarClosedByX(false);
+                            setYtMiniScreenClosedByX(false);
+                            setYtmTopBarClosedByX(false);
                             onSelectTrack(t);
                           }}
                           className={`p-2 rounded-lg text-left flex items-center justify-between text-xs transition-colors cursor-pointer ${
                             selected
                               ? 'bg-rose-600/25 border border-rose-500/50 text-white'
-                              : 'bg-slate-900/90 hover:bg-slate-700 text-slate-200 border border-slate-700'
+                              : 'bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-800'
                           }`}
                         >
-                          <span className="truncate font-medium pr-2">{t.title}</span>
-                          <span className="font-mono text-[11px] text-slate-300 shrink-0">
+                          <span className="truncate font-medium pr-1">{t.title}</span>
+                          <span className="font-mono text-[10px] text-slate-400 shrink-0">
                             {formatTime(t.durationSec)}
                           </span>
                         </button>
@@ -473,205 +566,107 @@ export const AndroidAppView: React.FC<AndroidAppViewProps> = ({
                     })}
                   </div>
                 </div>
-              </div>
-            )}
-
-            {/* Test Stuck Skip Button on Android */}
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => handleTriggerStuckSkipAd('youtube')}
-                className="py-2 px-3 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded-lg text-xs font-medium text-slate-100 transition-colors cursor-pointer truncate"
-              >
-                YouTube &ldquo;Skip&rdquo; Testi
-              </button>
-              <button
-                type="button"
-                onClick={() => handleTriggerStuckSkipAd('ytmusic')}
-                className="py-2 px-3 bg-slate-800 hover:bg-slate-700 border border-slate-600 rounded-lg text-xs font-medium text-slate-100 transition-colors cursor-pointer truncate"
-              >
-                YT Music &ldquo;Skip&rdquo; Testi
-              </button>
+              )}
             </div>
 
-            <div className="text-[11px] font-mono text-emerald-300 truncate border-t border-slate-700 pt-2">
+            <div className="text-[11px] font-mono text-emerald-300 truncate border-t border-slate-800 pt-2">
               {lastAndroidLog}
             </div>
           </div>
         </div>
 
-        {/* Right 7 Cols: Android Service Customizer & Installation Packages */}
-        <div className="lg:col-span-7 space-y-4">
-          <div className="bg-[#111827] border border-slate-700 rounded-lg p-5 space-y-4">
+        {/* Right 6 Cols: How It Works on Your Phone + GitHub APK Build & Download */}
+        <div className="lg:col-span-6 space-y-4">
+          {/* Summary of the 3 Native Capabilities */}
+          <div className="bg-[#111827] border border-slate-700 rounded-xl p-5 space-y-4">
+            <h2 className="text-base font-semibold text-white">
+              Telefonda Nasıl Çalışır? (Uygulama İçi Değil, Sistem Servisi)
+            </h2>
+
+            <div className="space-y-3 text-xs">
+              <div className="p-3.5 bg-slate-900 border border-slate-700 rounded-lg space-y-1">
+                <p className="font-bold text-rose-400">
+                  1. Normal YouTube Reklam Engelleme (Otomatik Skip &amp; Sessize Alma)
+                </p>
+                <p className="text-slate-300 leading-relaxed">
+                  Telefonunuzdaki <strong>normal YouTube</strong> uygulamasını açtığınızda arka planda çalışan{' '}
+                  <code className="text-emerald-300">PureStreamAccessibilityService</code> reklamları milisaniyede
+                  algılar, <strong>&ldquo;Atla / Skip&rdquo;</strong> tuşuna otomatik tıklar ve geçilemeyen reklam
+                  varsa sesini otomatik kapatır.
+                </p>
+              </div>
+
+              <div className="p-3.5 bg-slate-900 border border-slate-700 rounded-lg space-y-1">
+                <p className="font-bold text-purple-400">
+                  2. Normal YouTube Arka Plana Alındığında Beliren Küçük Ekran (Mini-Screen)
+                </p>
+                <p className="text-slate-300 leading-relaxed">
+                  Normal YouTube&apos;da video oynarken ana ekrana döndüğünüzde veya başka bir uygulamaya
+                  geçtiğinizde <code className="text-emerald-300">FloatingMiniPlayerService</code> devreye girer ve
+                  ekranın üzerinde sürüklenebilir <strong>Küçük Ekran</strong> açar. Üzerindeki{' '}
+                  <strong>⏸ Durdur / ▶ Oynat</strong> tuşuyla videoyu durdurup oynatabilir, isterseniz{' '}
+                  <strong>✕ Videoyu Kapat</strong> tuşuyla tamamen kapatabilirsiniz.
+                </p>
+              </div>
+
+              <div className="p-3.5 bg-slate-900 border border-slate-700 rounded-lg space-y-1">
+                <p className="font-bold text-emerald-400">
+                  3. Normal YT Music Telefon Üst Sekmesinde Çalan Şarkı &amp; Şarkı Değiştirme
+                </p>
+                <p className="text-slate-300 leading-relaxed">
+                  Normal <strong>YT Music</strong> uygulamasını açtığınızda veya arka plana aldığınızda telefonun{' '}
+                  <strong>üst bildirim sekmesinde (Android MediaStyle Notification)</strong> çalan şarkının adını ve
+                  sanatçısını gösterir. Üst sekmedeki <strong>⏮ Önceki</strong>, <strong>⏯ Durdur/Oynat</strong> ve{' '}
+                  <strong>⏭ Sonraki</strong> tuşlarıyla istediğiniz zaman önceki veya sonraki şarkıya geçebilirsiniz.
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* GitHub Direct Download Card */}
+          <div className="bg-[#111827] border-2 border-rose-500/60 rounded-xl p-5 space-y-3">
             <div className="flex items-center justify-between">
-              <h2 className="text-base font-semibold text-white">
-                Android Telefon Üst Bildirim & Otomatik Skip Ayarları
-              </h2>
-              <span className="text-xs font-mono text-emerald-400">~80 KB Hafif Servis</span>
+              <span className="text-xs font-mono font-bold text-rose-400">
+                GITHUB ACTIONS OTOMATİK APK &amp; DİREKT İNDİRME LİNKİ
+              </span>
+              <span className="text-xs font-mono text-emerald-400">v5.0.0 · AGP 9.1.1</span>
             </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Değişiklikleri GitHub deponuza (<strong>guvenKazici1/yt-pure-apk</strong>) gönderdiğinizde GitHub
+              Actions yeni <strong>v5.0.0</strong> APK&apos;sını otomatik derler ve aşağıdaki sabit bağlantıdan
+              indirilebilir hale getirir:
+            </p>
+            <div className="p-3 bg-slate-950 border border-slate-800 rounded-lg font-mono text-xs text-emerald-300 break-all">
+              https://github.com/guvenKazici1/yt-pure-apk/releases/latest/download/app-debug.apk
+            </div>
+            <div className="flex flex-wrap gap-2 pt-1">
+              <a
+                href="https://github.com/guvenKazici1/yt-pure-apk/releases/latest/download/app-debug.apk"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex-1 py-2.5 px-4 bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold rounded-lg flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <Download className="w-4 h-4" />
+                <span>GitHub Latest APK İndir (app-debug.apk)</span>
+              </a>
               <button
                 type="button"
-                onClick={() =>
-                  setConfig((c) => ({ ...c, foregroundKeepAliveNotification: !c.foregroundKeepAliveNotification }))
-                }
-                className={`p-3.5 rounded-lg border text-left transition-colors cursor-pointer ${
-                  config.foregroundKeepAliveNotification
-                    ? 'bg-slate-900 border-slate-600 text-white'
-                    : 'bg-slate-900/40 border-slate-800 text-slate-400'
-                }`}
+                onClick={handleDownloadAndroidZip}
+                className="py-2.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-lg flex items-center justify-center gap-2 cursor-pointer"
               >
-                <div className="flex items-center justify-between text-xs font-semibold">
-                  <span>Telefonun Üst Bildiriminde Çal (✕ İle Kapat)</span>
-                  <span className="font-mono text-emerald-400">
-                    {config.foregroundKeepAliveNotification ? 'AÇIK' : 'KAPALI'}
-                  </span>
-                </div>
-                <p className="text-[11px] text-slate-300 mt-1">
-                  YouTube veya YT Music arkaplana alındığında telefonun üst bildirim çubuğunda otomatik devreye girer.
-                </p>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setConfig((c) => ({ ...c, autoClickSkipNode: !c.autoClickSkipNode }))}
-                className={`p-3.5 rounded-lg border text-left transition-colors cursor-pointer ${
-                  config.autoClickSkipNode
-                    ? 'bg-slate-900 border-slate-600 text-white'
-                    : 'bg-slate-900/40 border-slate-800 text-slate-400'
-                }`}
-              >
-                <div className="flex items-center justify-between text-xs font-semibold">
-                  <span>Otomatik &ldquo;Atla / Skip&rdquo; Tıklayıcı</span>
-                  <span className="font-mono text-emerald-400">{config.autoClickSkipNode ? 'AÇIK' : 'KAPALI'}</span>
-                </div>
-                <p className="text-[11px] text-slate-300 mt-1">
-                  YouTube & YT Music içindeki <code className="text-emerald-300">skip_ad_button</code> düğmesine anında
-                  basar.
-                </p>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setConfig((c) => ({ ...c, gestureTapFallback: !c.gestureTapFallback }))}
-                className={`p-3.5 rounded-lg border text-left transition-colors cursor-pointer ${
-                  config.gestureTapFallback
-                    ? 'bg-slate-900 border-slate-600 text-white'
-                    : 'bg-slate-900/40 border-slate-800 text-slate-400'
-                }`}
-              >
-                <div className="flex items-center justify-between text-xs font-semibold">
-                  <span>Kalan Skip Tuşuna Parmak Dokunuşu</span>
-                  <span className="font-mono text-emerald-400">{config.gestureTapFallback ? 'AÇIK' : 'KAPALI'}</span>
-                </div>
-                <p className="text-[11px] text-slate-300 mt-1">
-                  Ekranda asılı kalan Skip tuşunun koordinatını bulup gerçek dokunuş (GestureTap) gönderir.
-                </p>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setConfig((c) => ({ ...c, autoMuteAdStream: !c.autoMuteAdStream }))}
-                className={`p-3.5 rounded-lg border text-left transition-colors cursor-pointer ${
-                  config.autoMuteAdStream
-                    ? 'bg-slate-900 border-slate-600 text-white'
-                    : 'bg-slate-900/40 border-slate-800 text-slate-400'
-                }`}
-              >
-                <div className="flex items-center justify-between text-xs font-semibold">
-                  <span>Geçilemeyen Reklamda Sesi Kapat</span>
-                  <span className="font-mono text-emerald-400">{config.autoMuteAdStream ? 'AÇIK' : 'KAPALI'}</span>
-                </div>
-                <p className="text-[11px] text-slate-300 mt-1">
-                  5 saniyelik geri sayım süresince telefonun medya sesini kapatır, video başlayınca açar.
-                </p>
+                <Download className="w-4 h-4" />
+                <span>Proje ZIP</span>
               </button>
             </div>
           </div>
 
-          {/* Direct APK & WebAPK Download Options for Android */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="bg-[#111827] border-2 border-rose-500/60 rounded-lg p-5 flex flex-col justify-between space-y-4">
-              <div className="space-y-2">
-                <span className="text-xs font-mono text-rose-400">DİREKT .APK PAKETİ + PROJE DOSYASI</span>
-                <h3 className="text-sm font-semibold text-white">
-                  PureStream-YouTube-Premium.apk İndir
-                </h3>
-                <p className="text-xs text-slate-300 leading-relaxed">
-                  YouTube veya YT Music arkaplana alındığında telefonun üst bildirim çubuğunda oynatıcı açan,{' '}
-                  <code className="text-white">✕ Kapat</code> tuşuyla kapatılabilen ve reklamlarda otomatik Skip yapan
-                  Android paketi.
-                </p>
-              </div>
-              <div className="space-y-2">
-                <a
-                  href="/api/purestream-youtube-premium.apk"
-                  download="PureStream-YouTube-Premium.apk"
-                  onClick={handleDownloadDirectApk}
-                  className={`w-full py-2.5 px-4 text-white text-xs font-semibold rounded-lg flex items-center justify-center gap-2 transition-all active:scale-95 cursor-pointer whitespace-nowrap shrink-0 shadow-md ${
-                    apkClicked ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-rose-600 hover:bg-rose-500'
-                  }`}
-                >
-                  <Download className="w-4 h-4" />
-                  {apkClicked ? '✓ APK İndiriliyor (PureStream.apk)' : 'PureStream-YouTube-Premium.apk İndir'}
-                </a>
-                <button
-                  type="button"
-                  onClick={handleDownloadAndroidZip}
-                  className="w-full py-2 px-4 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-lg flex items-center justify-center gap-2 transition-colors cursor-pointer whitespace-nowrap shrink-0"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  Kaynak Kodu & GitHub Derleyici (.ZIP)
-                </button>
-              </div>
-            </div>
-
-            <div className="bg-[#111827] border border-slate-700 rounded-lg p-5 flex flex-col justify-between space-y-4">
-              <div className="space-y-2">
-                <span className="text-xs font-mono text-emerald-400">TEK TIKLA KURULUM · WEBAPK & MACRODROID</span>
-                <h3 className="text-sm font-semibold text-white">
-                  Bilinmeyen Kaynak İzni Gerekmeden Telefona Kur
-                </h3>
-                <p className="text-xs text-slate-300 leading-relaxed">
-                  Android&apos;in &ldquo;Bilinmeyen Uygulamaları Yükle&rdquo; uyarısına takılmadan doğrudan telefona{' '}
-                  <strong>WebAPK</strong> olarak kurabilir veya hazır <strong>.macro</strong> otomasyon dosyasını
-                  indirebilirsiniz.
-                </p>
-              </div>
-              <div className="space-y-2">
-                {!isInstalled && isInstallable && (
-                  <button
-                    type="button"
-                    onClick={install}
-                    className="w-full py-2.5 px-4 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-lg flex items-center justify-center gap-2 transition-colors cursor-pointer whitespace-nowrap shrink-0"
-                  >
-                    <Smartphone className="w-4 h-4" />
-                    Doğrudan Telefona WebAPK Olarak Kur
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={handleDownloadMacroDroid}
-                  className="w-full py-2.5 px-4 bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/50 text-emerald-300 text-xs font-semibold rounded-lg flex items-center justify-center gap-2 transition-colors cursor-pointer whitespace-nowrap shrink-0"
-                >
-                  <Download className="w-4 h-4" />
-                  Hazır Android Profilini İndir (.macro)
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Android Kotlin Source Code Inspector */}
-          <div className="bg-[#111827] border border-slate-700 rounded-lg overflow-hidden">
+          {/* Code Inspector */}
+          <div className="bg-[#111827] border border-slate-700 rounded-xl overflow-hidden">
             <div className="px-4 py-3 border-b border-slate-700 flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-2">
                 <Terminal className="w-4 h-4 text-slate-300" />
-                <span className="text-xs font-semibold text-white">
-                  Android Telefon Üst Bildirim & Skip Servisi Kodu
-                </span>
+                <span className="text-xs font-semibold text-white">Android Sistem Servisi Kodları</span>
               </div>
-
               <div className="flex items-center gap-2">
                 <div className="flex items-center bg-slate-900 p-1 rounded-lg border border-slate-700">
                   {(
@@ -686,7 +681,7 @@ export const AndroidAppView: React.FC<AndroidAppViewProps> = ({
                       key={tab}
                       type="button"
                       onClick={() => setActiveCodeFile(tab)}
-                      className={`px-2.5 py-1 text-[11px] font-mono rounded transition-colors cursor-pointer whitespace-nowrap shrink-0 ${
+                      className={`px-2 py-1 text-[10px] font-mono rounded transition-colors cursor-pointer whitespace-nowrap ${
                         activeCodeFile === tab ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-slate-200'
                       }`}
                     >
@@ -697,15 +692,14 @@ export const AndroidAppView: React.FC<AndroidAppViewProps> = ({
                 <button
                   type="button"
                   onClick={handleCopyCode}
-                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-lg flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
+                  className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-lg flex items-center gap-1 cursor-pointer"
                 >
                   {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
                   {copied ? 'Kopyalandı' : 'Kopyala'}
                 </button>
               </div>
             </div>
-
-            <pre className="p-4 bg-slate-950 text-xs font-mono text-slate-200 overflow-x-auto max-h-[240px] leading-relaxed">
+            <pre className="p-4 bg-slate-950 text-xs font-mono text-slate-200 overflow-x-auto max-h-[200px] leading-relaxed">
               <code>{currentCode}</code>
             </pre>
           </div>

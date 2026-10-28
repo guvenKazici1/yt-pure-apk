@@ -134,7 +134,7 @@ const INITIAL_EVENTS: InterceptionEvent[] = [
 ];
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'player' | 'android' | 'extension' | 'simulator'>('player');
+  const [activeTab, setActiveTab] = useState<'player' | 'android' | 'extension' | 'simulator'>('android');
   const [backgroundGuardActive, setBackgroundGuardActive] = useState<boolean>(true);
   const [tracks, setTracks] = useState<MediaTrack[]>(CURATED_TRACKS);
   const [activeTrack, setActiveTrack] = useState<MediaTrack>(CURATED_TRACKS[3]);
